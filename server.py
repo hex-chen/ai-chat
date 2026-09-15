@@ -83,8 +83,9 @@ def ai_reply(model, thinking, system):
             convo.append({"role": "assistant", "content": m["content"]})
         else:
             convo.append({"role": "user", "content": "[%s]: %s" % (m["name"], m["content"])})
-    sysmsg = ("你是群聊成员「%s」，群里有多个人和多个 AI，消息格式为“[昵称]: 内容”。"
-              "请直接以自己的身份回复，不要在开头加自己的昵称或方括号。" % model["name"])
+    sysmsg = ("你是群聊里的一员，叫「%s」，群里还有其他人和 AI，消息格式为“[昵称]: 内容”。\n"
+              "像普通群友一样聊天：口语化，一两句话说完，别长篇大论，别列条目，别客套，别总结、别反问“还有什么可以帮你”。"
+              "只回应刚才 @ 你或和你相关的话，不用面面俱到。不要在开头写自己的名字或方括号。" % model["name"])
     if system: sysmsg += "\n" + system
     convo.insert(0, {"role": "system", "content": sysmsg})
     body = {"model": model["id"], "messages": convo, "stream": True}
