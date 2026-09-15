@@ -3,7 +3,7 @@
 用法: python3 server.py [host] [port]   默认 127.0.0.1 666
 环境变量: API_BASE, API_KEY 可覆盖上游地址与密钥。
 """
-import json, os, sys, time, queue, threading, urllib.request, urllib.error
+import json, os, sys, time, random, queue, threading, urllib.request, urllib.error
 from http.server import ThreadingHTTPServer, BaseHTTPRequestHandler
 
 API_BASE = os.environ.get("API_BASE", "http://100.105.192.115:8080/v1").rstrip("/")
@@ -31,13 +31,25 @@ def api(method, path, body=None):
     return urllib.request.urlopen(req, timeout=600)
 
 
+BASE_MODEL = os.environ.get("MODEL", "Qwen3.8-27B")
+PERSONAS = [
+    ("小明", "爱吐槽的大学生，说话带点网络梗"),
+    ("老王", "四十多岁的东北大叔，直爽，爱讲段子"),
+    ("阿静", "安静的文艺女生，喜欢看书，话少但走心"),
+    ("大壮", "健身教练，热情，什么话题都能扯到锻炼"),
+    ("小美", "爱美食的吃货，经常跑题聊吃的"),
+    ("程序猿", "码农，理性，偶尔冷幽默"),
+    ("张老师", "退休语文老师，温和，爱纠正错别字"),
+    ("阿宅", "二次元宅，说话夹杂动漫梗"),
+    ("包租婆", "精明的房东阿姨，嘴碎但热心"),
+    ("小北", "高中生，好奇心强，爱问为什么"),
+]
+models = [{"id": n, "name": n, "persona": p, "model": BASE_MODEL} for n, p in PERSONAS]
+ai_lock = threading.Lock()  # 显存有限，AI 回复串行
+
+
 def load_models():
-    global models
-    try:
-        with api("GET", "/models") as r:
-            models = [{"id": m["id"], "name": m.get("name") or m["id"]} for m in json.load(r)["data"]]
-    except Exception as e:
-        print("获取模型失败:", e, file=sys.stderr)
+    pass
 
 
 def broadcast(ev, data):
@@ -68,49 +80,52 @@ def find_models(text):
     for m in models:
         if ("@" + m["id"]) in text or ("@" + m["name"]) in text:
             hit.append(m)
-    if not hit and ("@AI" in text or "@ai" in text or "@所有" in text):
-        hit = models[:1]
+    if "@所有人" in text or "@全体" in text:
+        hit = list(models)
+    elif not hit and ("@AI" in text or "@ai" in text):
+        hit = [random.choice(models)]
     return hit
 
 
 def ai_reply(model, thinking, system):
     """让模型基于群聊记录回复，流式广播"""
-    with lock:
-        hist = messages[-40:]
-    convo = []
-    for m in hist:
-        if m["role"] == "assistant" and m.get("model") == model["id"]:
-            convo.append({"role": "assistant", "content": m["content"]})
-        else:
-            convo.append({"role": "user", "content": "[%s]: %s" % (m["name"], m["content"])})
-    sysmsg = ("你是群聊里的一员，叫「%s」，群里还有其他人和 AI，消息格式为“[昵称]: 内容”。\n"
-              "像普通群友一样聊天：口语化，一两句话说完，别长篇大论，别列条目，别客套，别总结、别反问“还有什么可以帮你”。"
-              "只回应刚才 @ 你或和你相关的话，不用面面俱到。不要在开头写自己的名字或方括号。" % model["name"])
-    if system: sysmsg += "\n" + system
-    convo.insert(0, {"role": "system", "content": sysmsg})
-    body = {"model": model["id"], "messages": convo, "stream": True}
-    if not thinking:
-        body["chat_template_kwargs"] = {"enable_thinking": False}
-    msg = add_message("assistant", model["name"], "", done=False, model=model["id"])
-    content, think, in_think = "", "", False
-    try:
-        with api("POST", "/chat/completions", json.dumps(body).encode()) as r:
-            for line in r:
-                line = line.decode("utf-8", "ignore").strip()
-                if not line.startswith("data:"): continue
-                d = line[5:].strip()
-                if d == "[DONE]": break
-                try: delta = json.loads(d)["choices"][0]["delta"]
-                except Exception: continue
-                if delta.get("reasoning_content"):
-                    think += delta["reasoning_content"]
-                if delta.get("content"):
-                    content += delta["content"]
-                broadcast("delta", {"id": msg["id"], "content": content, "think": think})
-    except urllib.error.HTTPError as e:
-        content += "\n\n**错误 %d**: %s" % (e.code, e.read().decode("utf-8", "ignore")[:500])
-    except Exception as e:
-        content += "\n\n**请求失败**: %s" % e
+    with ai_lock:
+      with lock:
+          hist = messages[-40:]
+      convo = []
+      for m in hist:
+          if m["role"] == "assistant" and m.get("model") == model["id"]:
+              convo.append({"role": "assistant", "content": m["content"]})
+          else:
+              convo.append({"role": "user", "content": "[%s]: %s" % (m["name"], m["content"])})
+      sysmsg = ("你是群聊里的一员，叫「%s」，人设：%s。群里还有其他人，消息格式为“[昵称]: 内容”。\n"
+                "像普通群友一样聊天：口语化，一两句话说完，别长篇大论，别列条目，别客套，别总结、别反问“还有什么可以帮你”。"
+                "只回应刚才 @ 你或和你相关的话，不用面面俱到。不要在开头写自己的名字或方括号。" % model["name"])
+      if system: sysmsg += "\n" + system
+      convo.insert(0, {"role": "system", "content": sysmsg})
+      body = {"model": model["model"], "messages": convo, "stream": True}
+      if not thinking:
+          body["chat_template_kwargs"] = {"enable_thinking": False}
+      content, think, in_think = "", "", False
+      msg = add_message("assistant", model["name"], "", done=False, model=model["id"])
+      try:
+          with api("POST", "/chat/completions", json.dumps(body).encode()) as r:
+              for line in r:
+                  line = line.decode("utf-8", "ignore").strip()
+                  if not line.startswith("data:"): continue
+                  d = line[5:].strip()
+                  if d == "[DONE]": break
+                  try: delta = json.loads(d)["choices"][0]["delta"]
+                  except Exception: continue
+                  if delta.get("reasoning_content"):
+                      think += delta["reasoning_content"]
+                  if delta.get("content"):
+                      content += delta["content"]
+                  broadcast("delta", {"id": msg["id"], "content": content, "think": think})
+      except urllib.error.HTTPError as e:
+          content += "\n\n**错误 %d**: %s" % (e.code, e.read().decode("utf-8", "ignore")[:500])
+      except Exception as e:
+          content += "\n\n**请求失败**: %s" % e
     with lock:
         msg["content"] = content or "（无回复）"
         if think: msg["think"] = think
@@ -191,6 +206,5 @@ class Handler(BaseHTTPRequestHandler):
 if __name__ == "__main__":
     host = sys.argv[1] if len(sys.argv) > 1 else "127.0.0.1"
     port = int(sys.argv[2]) if len(sys.argv) > 2 else 666
-    load_models()
     print("AI 群聊室 -> http://%s:%d   上游 %s   模型 %s" % (host, port, API_BASE, [m["id"] for m in models]))
     ThreadingHTTPServer((host, port), Handler).serve_forever()

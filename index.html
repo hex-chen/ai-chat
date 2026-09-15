@@ -53,9 +53,9 @@ footer button{padding:0 18px;border:0;border-radius:10px;background:var(--accent
 </aside>
 <main>
   <header><div><button id="toggle" onclick="side.style.display='flex';close.style.display='block'">☰</button> <b>AI 群聊室</b></div><span id="status">连接中…</span></header>
-  <div id="msgs"><div class="hint">还没有消息，@ 一个 AI 开始聊吧 👋</div></div>
+  <div id="msgs"><div class="hint">还没有消息，@ 个群友或 @所有人 开始聊吧 👋</div></div>
   <footer>
-    <textarea id="input" rows="1" placeholder="输入消息，@模型名 召唤 AI；Enter 发送，Shift+Enter 换行"></textarea>
+    <textarea id="input" rows="1" placeholder="输入消息，@名字 召唤群友，@所有人 全员回复；Enter 发送，Shift+Enter 换行"></textarea>
     <button onclick="send()">发送</button>
   </footer>
 </main>
@@ -83,7 +83,7 @@ function renderMembers(){$('#members').innerHTML='';const sel=$('#autoModel');se
   const o=document.createElement('option');o.value=m.id;o.textContent=m.name;sel.append(o);}
  const last=localStorage.getItem('autoModel');if(last)sel.value=last;}
 async function init(){const s=await(await fetch('/api/state')).json();models=s.models;renderMembers();
- $('#msgs').innerHTML=s.messages.length?'':'<div class="hint">还没有消息，@ 一个 AI 开始聊吧 👋</div>';nodes={};
+ $('#msgs').innerHTML=s.messages.length?'':'<div class="hint">还没有消息，@ 个群友或 @所有人 开始聊吧 👋</div>';nodes={};
  for(const m of s.messages)render(m);$('#msgs').scrollTop=$('#msgs').scrollHeight;}
 function connect(){const es=new EventSource('/api/events');
  es.onopen=()=>{$('#status').textContent='已连接';init();};
