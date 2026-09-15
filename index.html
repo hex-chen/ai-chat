@@ -1,0 +1,103 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI 群聊室</title>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/marked/12.0.2/marked.min.js"></script>
+<style>
+:root{--bg:#f6f7f9;--panel:#fff;--border:#e3e5e8;--text:#1f2328;--muted:#6b7280;--accent:#2563eb;--mine:#dbeafe;--ai:#f0fdf4;--aib:#bbf7d0}
+@media(prefers-color-scheme:dark){:root{--bg:#111318;--panel:#1a1d24;--border:#2a2e37;--text:#e6e8eb;--muted:#9aa0a6;--accent:#3b82f6;--mine:#1e3a5f;--ai:#14261b;--aib:#245c35}}
+*{box-sizing:border-box}body{margin:0;font:15px/1.6 -apple-system,BlinkMacSystemFont,"PingFang SC","Helvetica Neue",sans-serif;background:var(--bg);color:var(--text);display:flex;height:100vh}
+aside{width:230px;border-right:1px solid var(--border);background:var(--panel);display:flex;flex-direction:column;padding:12px;gap:10px;font-size:14px}
+aside h3{margin:6px 0 2px;font-size:13px;color:var(--muted)}
+aside input,aside select{width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font:inherit}
+aside textarea{width:100%;padding:6px 8px;border:1px solid var(--border);border-radius:6px;background:var(--bg);color:var(--text);font:inherit;font-size:13px;resize:vertical}
+.member{padding:6px 8px;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px}.member:hover{background:var(--bg)}
+.member b{font-weight:500}.member small{color:var(--muted)}
+.dot{width:8px;height:8px;border-radius:50%;background:#22c55e;flex:none}
+aside label{display:flex;gap:6px;align-items:center;color:var(--muted);font-size:13px}
+aside button{padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--panel);color:var(--text);cursor:pointer;font:inherit}
+main{flex:1;display:flex;flex-direction:column;min-width:0}
+header{padding:10px 16px;border-bottom:1px solid var(--border);background:var(--panel);display:flex;justify-content:space-between;align-items:center}
+header span{color:var(--muted);font-size:13px}
+#msgs{flex:1;overflow:auto;padding:16px;display:flex;flex-direction:column;gap:12px}
+.msg{max-width:78%;display:flex;flex-direction:column;align-self:flex-start}
+.msg.mine{align-self:flex-end;align-items:flex-end}
+.msg .name{font-size:12px;color:var(--muted);margin:0 6px 2px}
+.msg .body{padding:8px 13px;border-radius:12px;border:1px solid var(--border);background:var(--panel);word-break:break-word}
+.msg.mine .body{background:var(--mine)}.msg.ai .body{background:var(--ai);border-color:var(--aib)}
+.msg .think{color:var(--muted);font-size:13px;border-left:3px solid var(--border);padding-left:8px;margin-bottom:6px;white-space:pre-wrap;max-height:160px;overflow:auto}
+.msg pre{background:rgba(127,127,127,.12);padding:10px;border-radius:8px;overflow:auto}.msg code{font-family:Menlo,Consolas,monospace;font-size:13px}
+.msg p:first-child{margin-top:0}.msg p:last-child{margin-bottom:0}
+.typing::after{content:"▍";animation:b 1s infinite}@keyframes b{50%{opacity:0}}
+footer{display:flex;gap:8px;padding:12px 16px;border-top:1px solid var(--border);background:var(--panel)}
+footer textarea{flex:1;resize:none;padding:10px;border:1px solid var(--border);border-radius:10px;font:inherit;background:var(--bg);color:var(--text);max-height:200px}
+footer button{padding:0 18px;border:0;border-radius:10px;background:var(--accent);color:#fff;font:inherit;cursor:pointer}
+.hint{color:var(--muted);text-align:center;margin:auto}
+#toggle{display:none;border:0;background:none;font-size:18px;cursor:pointer;color:var(--text)}
+@media(max-width:700px){aside{display:none;position:fixed;inset:0;width:100%;z-index:9}#toggle{display:inline-block}.msg{max-width:92%}}
+</style>
+</head>
+<body>
+<aside id="side">
+  <h3>我的昵称</h3><input id="name" placeholder="起个名字">
+  <h3>群成员（点击 @）</h3><div id="members"></div>
+  <h3>AI 设置</h3>
+  <label><input type="checkbox" id="auto"> 不 @ 也自动回复：</label>
+  <select id="autoModel"></select>
+  <label><input type="checkbox" id="thinking" checked> 允许思考</label>
+  <textarea id="system" rows="3" placeholder="附加系统提示（可选）"></textarea>
+  <button onclick="if(confirm('清空整个群的聊天记录？'))fetch('/api/clear',{method:'POST'})">清空群记录</button>
+  <button id="close" style="display:none" onclick="side.style.display='none'">关闭</button>
+</aside>
+<main>
+  <header><div><button id="toggle" onclick="side.style.display='flex';close.style.display='block'">☰</button> <b>AI 群聊室</b></div><span id="status">连接中…</span></header>
+  <div id="msgs"><div class="hint">还没有消息，@ 一个 AI 开始聊吧 👋</div></div>
+  <footer>
+    <textarea id="input" rows="1" placeholder="输入消息，@模型名 召唤 AI；Enter 发送，Shift+Enter 换行"></textarea>
+    <button onclick="send()">发送</button>
+  </footer>
+</main>
+<script>
+const $=s=>document.querySelector(s), esc=s=>s.replace(/[&<>]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;'}[c]));
+let models=[], nodes={};
+$('#name').value=localStorage.getItem('name')||('用户'+Math.floor(Math.random()*1000));
+for(const k of ['name','system']){$('#'+k).oninput=e=>localStorage.setItem(k,e.target.value);}
+$('#system').value=localStorage.getItem('system')||'';
+$('#auto').checked=localStorage.getItem('auto')==='1';$('#auto').onchange=e=>localStorage.setItem('auto',e.target.checked?'1':'0');
+$('#thinking').checked=localStorage.getItem('thinking')!=='0';$('#thinking').onchange=e=>localStorage.setItem('thinking',e.target.checked?'1':'0');
+$('#autoModel').onchange=e=>localStorage.setItem('autoModel',e.target.value);
+
+function highlight(t){return esc(t).replace(/@([^\s@]+)/g,'<b style="color:var(--accent)">@$1</b>').replace(/\n/g,'<br>');}
+function render(m){const mine=m.role==='user'&&m.name===$('#name').value;let d=nodes[m.id];
+ if(!d){d=document.createElement('div');nodes[m.id]=d;const h=$('#msgs .hint');if(h)h.remove();$('#msgs').append(d);}
+ d.className='msg '+(m.role==='assistant'?'ai':'')+(mine?' mine':'');
+ let body;if(m.role==='user')body=highlight(m.content);
+ else{body=(m.think?`<div class="think">${esc(m.think)}</div>`:'')+(m.content?marked.parse(m.content):'');if(!m.done)body+='<span class="typing"></span>';}
+ d.innerHTML=`<div class="name">${esc(m.name)}${m.role==='assistant'?' 🤖':''}</div><div class="body">${body}</div>`;
+ const box=$('#msgs');if(box.scrollHeight-box.scrollTop-box.clientHeight<200)box.scrollTop=box.scrollHeight;}
+function renderMembers(){$('#members').innerHTML='';const sel=$('#autoModel');sel.innerHTML='';
+ for(const m of models){const d=document.createElement('div');d.className='member';d.innerHTML=`<span class="dot"></span><span><b>${esc(m.name)}</b><br><small>${esc(m.id)}</small></span>`;
+  d.onclick=()=>{$('#input').value+='@'+m.name+' ';$('#input').focus();};$('#members').append(d);
+  const o=document.createElement('option');o.value=m.id;o.textContent=m.name;sel.append(o);}
+ const last=localStorage.getItem('autoModel');if(last)sel.value=last;}
+async function init(){const s=await(await fetch('/api/state')).json();models=s.models;renderMembers();
+ $('#msgs').innerHTML=s.messages.length?'':'<div class="hint">还没有消息，@ 一个 AI 开始聊吧 👋</div>';nodes={};
+ for(const m of s.messages)render(m);$('#msgs').scrollTop=$('#msgs').scrollHeight;}
+function connect(){const es=new EventSource('/api/events');
+ es.onopen=()=>{$('#status').textContent='已连接';init();};
+ es.onerror=()=>{$('#status').textContent='连接断开，重连中…';};
+ es.addEventListener('message',e=>render(JSON.parse(e.data)));
+ es.addEventListener('delta',e=>{const d=JSON.parse(e.data);render({id:d.id,role:'assistant',name:nodes[d.id]?nodes[d.id].querySelector('.name').textContent.replace(' 🤖',''):'AI',content:d.content,think:d.think,done:false});});
+ es.addEventListener('clear',()=>{nodes={};$('#msgs').innerHTML='<div class="hint">记录已清空</div>';});}
+async function send(){const t=$('#input');const text=t.value.trim();if(!text)return;t.value='';autoSize();
+ const r=await fetch('/api/send',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({name:$('#name').value.trim()||'匿名',content:text,
+  auto:$('#auto').checked?$('#autoModel').value:null,thinking:$('#thinking').checked,system:$('#system').value})});
+ if(!r.ok)alert('发送失败: '+await r.text());}
+function autoSize(){const t=$('#input');t.style.height='auto';t.style.height=Math.min(t.scrollHeight,200)+'px';}
+$('#input').oninput=autoSize;$('#input').onkeydown=e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();send();}};
+connect();
+</script>
+</body>
+</html>
